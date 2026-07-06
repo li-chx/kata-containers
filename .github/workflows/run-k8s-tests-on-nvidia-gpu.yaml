@@ -45,8 +45,8 @@ jobs:
       fail-fast: false
       matrix:
         environment: [
-          { name: nvidia-gpu,                  vmm: qemu-nvidia-gpu,                runner: amd64-nvidia-a100,     coco: false },
-          { name: nvidia-gpu-runtime-rs,       vmm: qemu-nvidia-gpu-runtime-rs,     runner: amd64-nvidia-a100,     coco: false },
+          { name: nvidia-gpu,                  vmm: qemu-nvidia-gpu,                runner: amd64-nvidia-a100,     coco: false, snapshotter: "" },
+          { name: nvidia-gpu-runtime-rs,       vmm: qemu-nvidia-gpu-runtime-rs,     runner: amd64-nvidia-a100,     coco: false, snapshotter: "erofs" },
         ]
     concurrency:
       group: ${{ github.workflow }}-${{ github.job }}-${{ github.event.pull_request.number || github.ref }}-${{ toJSON(matrix) }}
@@ -60,8 +60,9 @@ jobs:
       KATA_HYPERVISOR: ${{ matrix.environment.vmm }}
       KUBERNETES: kubeadm
       KBS: ${{ matrix.environment.coco && 'true' || 'false' }}
-      SNAPSHOTTER: ${{ matrix.environment.coco && 'nydus' || '' }}
-      USE_EXPERIMENTAL_SNAPSHOTTER_SETUP: ${{ matrix.environment.coco && 'true' || 'false' }}
+      SNAPSHOTTER: ${{ matrix.environment.snapshotter }}
+      EROFS_SNAPSHOTTER_MODE: ${{ matrix.environment.snapshotter == 'erofs' && 'memory' || '' }}
+      EROFS_DMVERITY: ${{ matrix.environment.snapshotter == 'erofs' && 'dmverity' || '' }}
       K8S_TEST_HOST_TYPE: baremetal
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
