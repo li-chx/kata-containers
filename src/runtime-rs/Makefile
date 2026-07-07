@@ -80,6 +80,8 @@ HYPERVISOR_QEMU = qemu
 HYPERVISOR_CLH = clh-runtime-rs
 HYPERVISOR_NAME_CLH = clh
 HYPERVISOR_REMOTE = remote
+HYPERVISOR_OPENVMM = openvmm-azure-runtime-rs
+HYPERVISOR_NAME_OPENVMM = openvmm
 
 ARCH_SUPPORT_DB := x86_64 aarch64
 ifneq ($(filter $(ARCH),$(ARCH_SUPPORT_DB)),)
@@ -89,6 +91,15 @@ else
     USE_BUILTIN_DB := false
     $(info Dragonball does not support ARCH $(ARCH), disabled. \
         Specify "USE_BUILTIN_DB=true" to force enable.)
+endif
+
+ARCH_SUPPORT_OPENVMM := x86_64 aarch64
+ifneq ($(filter $(ARCH),$(ARCH_SUPPORT_OPENVMM)),)
+    USE_OPENVMM := true
+else
+    USE_OPENVMM := false
+    $(info OpenVMM does not support ARCH $(ARCH), disabled. \
+        Specify "USE_OPENVMM=true" to force enable.)
 endif
 
 HYPERVISOR ?= $(HYPERVISOR_QEMU)
@@ -587,6 +598,37 @@ ifneq (,$(REMOTE))
     DEFSANDBOXCGROUPONLY_REMOTE := true
 endif
 
+ifeq ($(USE_OPENVMM),true)
+    KNOWN_HYPERVISORS += $(HYPERVISOR_OPENVMM)
+    CONFIG_FILE_OPENVMM = configuration-openvmm-azure-runtime-rs.toml
+    CONFIG_OPENVMM = config/$(CONFIG_FILE_OPENVMM)
+    CONFIG_OPENVMM_IN = $(CONFIG_OPENVMM).in
+    CONFIG_PATH_OPENVMM = $(abspath $(CONFDIR)/$(CONFIG_FILE_OPENVMM))
+    CONFIG_PATHS += $(CONFIG_PATH_OPENVMM)
+    SYSCONFIG_OPENVMM = $(abspath $(SYSCONFDIR)/$(CONFIG_FILE_OPENVMM))
+    SYSCONFIG_PATHS += $(SYSCONFIG_OPENVMM)
+    CONFIGS += $(CONFIG_OPENVMM)
+    # openvmm-specific options (all should be suffixed by "_OPENVMM")
+    OPENVMMCMD ?= openvmm
+    OPENVMMPATH := $(PREFIXDEPS)/bin/$(OPENVMMCMD)
+    OPENVMMVALIDHYPERVISORPATHS := [\"$(OPENVMMPATH)\"]
+    VMROOTFSDRIVER_OPENVMM := virtio-blk-pci
+    DEFBLOCKSTORAGEDRIVER_OPENVMM := virtio-blk-pci
+    DEFNETWORKMODEL_OPENVMM := tcfilter
+    KERNELPARAMS_OPENVMM = console=hvc0 cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1
+    KERNELTYPE_OPENVMM = uncompressed
+    KERNEL_NAME_OPENVMM = $(call MAKE_KERNEL_NAME,$(KERNELTYPE_OPENVMM))
+    KERNELPATH_OPENVMM = $(KERNELDIR)/$(KERNEL_NAME_OPENVMM)
+    IMAGEPATH_OPENVMM := $(PKGDATADIR)/kata-containers-mariner.img
+    DEFSANDBOXCGROUPONLY_OPENVMM := true
+    # OpenVMM cannot hot-plug vCPUs/memory (resize_vcpu/resize_memory are
+    # no-ops), so size sandboxes statically like the other azure variants.
+    DEFSTATICRESOURCEMGMT_OPENVMM := true
+    DEFSHAREDFS_OPENVMM := virtio-fs
+    RUNTIMENAME := virt_container
+    PIPESIZE := 1
+endif
+
 ifeq ($(HYPERVISOR),$(HYPERVISOR_DB))
     DEFAULT_HYPERVISOR_CONFIG = $(CONFIG_FILE_DB)
 endif
@@ -605,6 +647,7 @@ USER_VARS += ARCH
 USER_VARS += BINDIR
 USER_VARS += CONFIG_DB_IN
 USER_VARS += CONFIG_FC_IN
+USER_VARS += CONFIG_OPENVMM_IN
 USER_VARS += CONFIG_PATH
 USER_VARS += CONFIG_QEMU_IN
 USER_VARS += CONFIG_QEMU_SE_IN
@@ -614,6 +657,7 @@ USER_VARS += CONFIG_QEMU_NVIDIA_GPU_IN
 USER_VARS += DESTDIR
 USER_VARS += HYPERVISOR
 USER_VARS += USE_BUILTIN_DB
+USER_VARS += USE_OPENVMM
 USER_VARS += DBCMD
 USER_VARS += DBCTLCMD
 USER_VARS += FCCTLCMD
@@ -647,6 +691,7 @@ USER_VARS += IMAGENAME_NV
 USER_VARS += IMAGECONFIDENTIALNAME
 USER_VARS += IMAGEPATH
 USER_VARS += IMAGEPATH_CLH_AZURE
+USER_VARS += IMAGEPATH_OPENVMM
 USER_VARS += IMAGEPATH_NV
 USER_VARS += IMAGECONFIDENTIALPATH
 USER_VARS += COCOIMAGENAME
@@ -775,9 +820,22 @@ USER_VARS += HYPERVISOR_CLH
 USER_VARS += HYPERVISOR_NAME_CLH
 USER_VARS += HYPERVISOR_QEMU
 USER_VARS += HYPERVISOR_FC
+USER_VARS += HYPERVISOR_OPENVMM
+USER_VARS += HYPERVISOR_NAME_OPENVMM
 USER_VARS += PIPESIZE
 USER_VARS += DBSHAREDFS
 USER_VARS += DEF_DGB_BRIDGES
+USER_VARS += KERNELPATH_OPENVMM
+USER_VARS += KERNELPARAMS_OPENVMM
+USER_VARS += OPENVMMCMD
+USER_VARS += OPENVMMPATH
+USER_VARS += OPENVMMVALIDHYPERVISORPATHS
+USER_VARS += VMROOTFSDRIVER_OPENVMM
+USER_VARS += DEFBLOCKSTORAGEDRIVER_OPENVMM
+USER_VARS += DEFNETWORKMODEL_OPENVMM
+USER_VARS += DEFSANDBOXCGROUPONLY_OPENVMM
+USER_VARS += DEFSTATICRESOURCEMGMT_OPENVMM
+USER_VARS += DEFSHAREDFS_OPENVMM
 USER_VARS += KATA_INSTALL_GROUP
 USER_VARS += KATA_INSTALL_OWNER
 USER_VARS += KATA_INSTALL_CFG_PERMS
@@ -834,12 +892,24 @@ COMMIT_MSG = $(if $(COMMIT),$(COMMIT),unknown)
 EXTRA_RUSTFEATURES :=
 
 # if use dragonball hypervisor, add the feature to build dragonball in runtime
+# Note: dragonball and openvmm cannot be enabled simultaneously due to
+# kvm-ioctls version conflicts (dragonball uses 0.12, openvmm uses 0.14)
 ifeq ($(USE_BUILTIN_DB),true)
-    EXTRA_RUSTFEATURES +=  dragonball
+  ifneq ($(USE_OPENVMM),true)
+    EXTRA_RUSTFEATURES += dragonball
+  endif
+endif
+
+# if use openvmm hypervisor, add the feature to build openvmm in runtime
+ifeq ($(USE_OPENVMM),true)
+    EXTRA_RUSTFEATURES += openvmm
 endif
 
 ifneq ($(EXTRA_RUSTFEATURES),)
-    override EXTRA_RUSTFEATURES := --features $(EXTRA_RUSTFEATURES)
+    comma := ,
+    empty :=
+    space := $(empty) $(empty)
+    override EXTRA_RUSTFEATURES := --features $(subst $(space),$(comma),$(strip $(EXTRA_RUSTFEATURES)))
 endif
 
 
@@ -928,7 +998,7 @@ static-checks-build: $(GENERATED_FILES)
 $(TARGET): $(GENERATED_FILES) $(TARGET_PATH)
 
 $(TARGET_PATH): $(SOURCES) | show-summary
-	@$(RELEASE_CARGO_PROFILE_ENV) RUSTFLAGS="$(EXTRA_RUSTFLAGS) --deny warnings" cargo build -p runtime-rs --target $(TRIPLE) $(if $(findstring release,$(BUILD_TYPE)),--release) $(EXTRA_RUSTFEATURES)
+	@$(RELEASE_CARGO_PROFILE_ENV) RUSTFLAGS="$(EXTRA_RUSTFLAGS) --deny warnings --allow deprecated" cargo build -p runtime-rs --target $(TRIPLE) $(if $(findstring release,$(BUILD_TYPE)),--release) $(EXTRA_RUSTFEATURES)
 
 $(GENERATED_FILES): %: %.in
 	@sed \
@@ -949,6 +1019,19 @@ clean: clean-generated-files
 ##TARGET clean-generated-files: clean generated files
 clean-generated-files:
 	@rm -f $(GENERATED_FILES)
+
+vendor:
+	@cargo vendor
+
+# Override standard_rust_check from utils.mk to use explicit features
+# instead of --all-features, since dragonball and openvmm have incompatible
+# transitive dependencies (kvm-ioctls 0.12 vs 0.14).
+standard_rust_check:
+	@echo "standard rust check..."
+	cargo fmt -- --check
+	cargo clippy --all-targets $(EXTRA_RUSTFEATURES) --release --locked \
+		-- \
+		-D warnings
 
 ##TARGET check: run test
 check: $(GENERATED_FILES) standard_rust_check
